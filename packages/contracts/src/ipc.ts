@@ -29,7 +29,13 @@ import type {
 import type { ProviderInstanceId } from "./providerInstance.ts";
 import type {
   ServerConfig,
+  ServerProcessDiagnosticsResult,
+  ServerProviderUpdateInput,
   ServerProviderUpdatedPayload,
+  ServerRemoveKeybindingResult,
+  ServerSignalProcessInput,
+  ServerSignalProcessResult,
+  ServerTraceDiagnosticsResult,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import type {
@@ -44,7 +50,7 @@ import type {
   TerminalSessionSnapshot,
   TerminalWriteInput,
 } from "./terminal.ts";
-import type { ServerUpsertKeybindingInput } from "./server.ts";
+import type { ServerRemoveKeybindingInput, ServerUpsertKeybindingInput } from "./server.ts";
 import type {
   ClientOrchestrationCommand,
   OrchestrationGetFullThreadDiffInput,
@@ -299,10 +305,15 @@ export interface LocalApi {
     refreshProviders: (input?: {
       readonly instanceId?: ProviderInstanceId;
     }) => Promise<ServerProviderUpdatedPayload>;
+    updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdatedPayload>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    removeKeybinding: (input: ServerRemoveKeybindingInput) => Promise<ServerRemoveKeybindingResult>;
     getSettings: () => Promise<ServerSettings>;
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
     discoverSourceControl: () => Promise<SourceControlDiscoveryResult>;
+    getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;
+    getProcessDiagnostics: () => Promise<ServerProcessDiagnosticsResult>;
+    signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
   };
 }
 
