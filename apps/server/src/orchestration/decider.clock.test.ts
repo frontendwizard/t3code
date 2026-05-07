@@ -1,6 +1,6 @@
 import { CommandId, EventId, ProjectId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
-import { DateTime, Duration, Effect, Layer } from "effect";
+import { DateTime, Duration, Effect, Random } from "effect";
 import { TestClock } from "effect/testing";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -8,6 +8,10 @@ import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
 const projectId = ProjectId.make("project-clock");
 const createdAt = "2026-01-01T00:00:00.000Z";
+const zeroRandomService = {
+  nextIntUnsafe: () => 0,
+  nextDoubleUnsafe: () => 0,
+};
 
 it.effect("uses the Effect clock for generated project update timestamps", () =>
   Effect.gen(function* () {
@@ -57,6 +61,10 @@ it.effect("uses the Effect clock for generated project update timestamps", () =>
     }
 
     assert.equal(event.occurredAt, expectedNow);
+    assert.equal(event.eventId, EventId.make("00000000-0000-4000-8000-000000000000"));
     assert.equal(event.payload.updatedAt, expectedNow);
-  }).pipe(Effect.provide(Layer.merge(TestClock.layer(), Layer.empty))),
+  }).pipe(
+    Effect.provide(TestClock.layer()),
+    Effect.provideService(Random.Random, zeroRandomService),
+  ),
 );
