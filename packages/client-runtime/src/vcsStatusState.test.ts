@@ -2,7 +2,7 @@ import { EnvironmentId, type VcsStatusResult } from "@t3tools/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { type GitStatusClient, createGitStatusManager } from "./gitStatusState.ts";
+import { type VcsStatusClient, createVcsStatusManager } from "./vcsStatusState.ts";
 
 /* ─── Test helpers ──────────────────────────────────────────────────── */
 
@@ -34,12 +34,12 @@ const BASE_STATUS: VcsStatusResult = {
 };
 
 function createMockClient(): {
-  client: GitStatusClient;
+  client: VcsStatusClient;
   listeners: Set<(event: VcsStatusResult) => void>;
   emit: (event: VcsStatusResult) => void;
 } {
   const listeners = new Set<(event: VcsStatusResult) => void>();
-  const client: GitStatusClient = {
+  const client: VcsStatusClient = {
     refreshStatus: vi.fn(async (input: { cwd: string }) => ({
       ...BASE_STATUS,
       refName: `${input.cwd}-refreshed`,
@@ -66,7 +66,7 @@ const OTHER_ENV_TARGET = { environmentId: EnvironmentId.make("env-remote"), cwd:
 
 /* ─── Tests ─────────────────────────────────────────────────────────── */
 
-describe("createGitStatusManager", () => {
+describe("createVcsStatusManager", () => {
   afterEach(() => {
     resetAtomRegistry();
   });
@@ -74,7 +74,7 @@ describe("createGitStatusManager", () => {
   describe("with explicit client (no reconnection)", () => {
     it("starts in a pending state when watching", () => {
       const { client } = createMockClient();
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => null,
       });
@@ -86,7 +86,7 @@ describe("createGitStatusManager", () => {
 
     it("shares one subscription per cwd and updates the snapshot", () => {
       const { client, listeners, emit } = createMockClient();
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => null,
       });
@@ -114,7 +114,7 @@ describe("createGitStatusManager", () => {
 
     it("refreshes via unary RPC without restarting the stream", async () => {
       const { client, emit } = createMockClient();
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => null,
       });
@@ -142,7 +142,7 @@ describe("createGitStatusManager", () => {
     it("keeps subscriptions isolated by environment when cwds match", () => {
       const local = createMockClient();
       const remote = createMockClient();
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => null,
       });
@@ -161,7 +161,7 @@ describe("createGitStatusManager", () => {
     });
 
     it("returns null from refresh when no client is available", async () => {
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => null,
       });
@@ -170,7 +170,7 @@ describe("createGitStatusManager", () => {
     });
 
     it("returns empty state for null targets", () => {
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => null,
       });
@@ -184,7 +184,7 @@ describe("createGitStatusManager", () => {
       const connectionListeners = new Set<() => void>();
       const clients = new Map<string, ReturnType<typeof createMockClient>>();
 
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: (envId) => clients.get(envId)?.client ?? null,
         getClientIdentity: (envId) => (clients.has(envId) ? envId : null),
@@ -217,7 +217,7 @@ describe("createGitStatusManager", () => {
       const connectionListeners = new Set<() => void>();
       const clients = new Map<string, ReturnType<typeof createMockClient>>();
 
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: (envId) => clients.get(envId)?.client ?? null,
         getClientIdentity: (envId) =>
@@ -262,7 +262,7 @@ describe("createGitStatusManager", () => {
       const connectionListeners = new Set<() => void>();
       const mock = createMockClient();
 
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => mock.client,
         getClientIdentity: () => "id",
@@ -284,7 +284,7 @@ describe("createGitStatusManager", () => {
   describe("with getClient config (one-shot)", () => {
     it("resolves client from config and subscribes", () => {
       const mock = createMockClient();
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: (envId) => (envId === "env-local" ? mock.client : null),
       });
@@ -300,7 +300,7 @@ describe("createGitStatusManager", () => {
     });
 
     it("returns noop when client is not available", () => {
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => null,
       });
@@ -314,7 +314,7 @@ describe("createGitStatusManager", () => {
   describe("reset", () => {
     it("tears down all active subscriptions", () => {
       const mock = createMockClient();
-      const manager = createGitStatusManager({
+      const manager = createVcsStatusManager({
         getRegistry: () => atomRegistry,
         getClient: () => mock.client,
       });

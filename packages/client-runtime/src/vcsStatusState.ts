@@ -6,19 +6,19 @@ import type { WsRpcClient } from "./wsRpcClient.ts";
 
 /* ─── Types ─────────────────────────────────────────────────────────── */
 
-export interface GitStatusState {
+export interface VcsStatusState {
   readonly data: VcsStatusResult | null;
   readonly error: GitManagerServiceError | null;
   readonly cause: Cause.Cause<GitManagerServiceError> | null;
   readonly isPending: boolean;
 }
 
-export interface GitStatusTarget {
+export interface VcsStatusTarget {
   readonly environmentId: EnvironmentId | null;
   readonly cwd: string | null;
 }
 
-export type GitStatusClient = Pick<WsRpcClient["vcs"], "onStatus" | "refreshStatus">;
+export type VcsStatusClient = Pick<WsRpcClient["vcs"], "onStatus" | "refreshStatus">;
 
 interface WatchedEntry {
   refCount: number;
@@ -29,14 +29,14 @@ interface WatchedEntry {
 
 const NOOP: () => void = () => undefined;
 
-export const EMPTY_GIT_STATUS_STATE = Object.freeze<GitStatusState>({
+export const EMPTY_VCS_STATUS_STATE = Object.freeze<VcsStatusState>({
   data: null,
   error: null,
   cause: null,
   isPending: false,
 });
 
-const INITIAL_GIT_STATUS_STATE = Object.freeze<GitStatusState>({
+const INITIAL_VCS_STATUS_STATE = Object.freeze<VcsStatusState>({
   data: null,
   error: null,
   cause: null,
@@ -45,24 +45,24 @@ const INITIAL_GIT_STATUS_STATE = Object.freeze<GitStatusState>({
 
 /* ─── Atoms ─────────────────────────────────────────────────────────── */
 
-const knownGitStatusKeys = new Set<string>();
+const knownVcsStatusKeys = new Set<string>();
 
-export const gitStatusStateAtom = Atom.family((key: string) => {
-  knownGitStatusKeys.add(key);
-  return Atom.make(INITIAL_GIT_STATUS_STATE).pipe(
+export const vcsStatusStateAtom = Atom.family((key: string) => {
+  knownVcsStatusKeys.add(key);
+  return Atom.make(INITIAL_VCS_STATUS_STATE).pipe(
     Atom.keepAlive,
-    Atom.withLabel(`git-status:${key}`),
+    Atom.withLabel(`vcs-status:${key}`),
   );
 });
 
-export const EMPTY_GIT_STATUS_ATOM = Atom.make(EMPTY_GIT_STATUS_STATE).pipe(
+export const EMPTY_VCS_STATUS_ATOM = Atom.make(EMPTY_VCS_STATUS_STATE).pipe(
   Atom.keepAlive,
-  Atom.withLabel("git-status:null"),
+  Atom.withLabel("vcs-status:null"),
 );
 
 /* ─── Helpers ───────────────────────────────────────────────────────── */
 
-export function getGitStatusTargetKey(target: GitStatusTarget): string | null {
+export function getVcsStatusTargetKey(target: VcsStatusTarget): string | null {
   if (target.environmentId === null || target.cwd === null) {
     return null;
   }
@@ -71,13 +71,13 @@ export function getGitStatusTargetKey(target: GitStatusTarget): string | null {
 
 /* ─── Subscription manager ──────────────────────────────────────────── */
 
-export interface GitStatusManagerConfig {
+export interface VcsStatusManagerConfig {
   /**
-   * Get the atom registry to read/write git status atoms.
+   * Get the atom registry to read/write VCS status atoms.
    */
   readonly getRegistry: () => AtomRegistry.AtomRegistry;
-  /** Resolve a git client for an environment. */
-  readonly getClient: (environmentId: EnvironmentId) => GitStatusClient | null;
+  /** Resolve a VCS client for an environment. */
+  readonly getClient: (environmentId: EnvironmentId) => VcsStatusClient | null;
   /**
    * Optional: get a stable identity for the current client.
    * Used to detect reconnections — when the identity changes the
@@ -92,10 +92,10 @@ export interface GitStatusManagerConfig {
   readonly subscribeClientChanges?: (listener: () => void) => () => void;
 }
 
-const GIT_STATUS_REFRESH_DEBOUNCE_MS = 1_000;
+const VCS_STATUS_REFRESH_DEBOUNCE_MS = 1_000;
 const nowMs = () => DateTime.toEpochMillis(DateTime.nowUnsafe());
 
-export function createGitStatusManager(config: GitStatusManagerConfig) {
+export function createVcsStatusManager(config: VcsStatusManagerConfig) {
   const watched = new Map<string, WatchedEntry>();
   const refreshInFlight = new Map<string, Promise<VcsStatusResult>>();
   const lastRefreshAt = new Map<string, number>();
@@ -103,11 +103,11 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
   /* ── Atom helpers ───────────────────────────────────────────────── */
 
   function markPending(targetKey: string): void {
-    const atom = gitStatusStateAtom(targetKey);
+    const atom = vcsStatusStateAtom(targetKey);
     const current = config.getRegistry().get(atom);
-    const next: GitStatusState =
+    const next: VcsStatusState =
       current.data === null
-        ? INITIAL_GIT_STATUS_STATE
+        ? INITIAL_VCS_STATUS_STATE
         : { ...current, error: null, cause: null, isPending: true };
     if (
       current.data === next.data &&
@@ -121,7 +121,7 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
   }
 
   function setData(targetKey: string, status: VcsStatusResult): void {
-    config.getRegistry().set(gitStatusStateAtom(targetKey), {
+    config.getRegistry().set(vcsStatusStateAtom(targetKey), {
       data: status,
       error: null,
       cause: null,
@@ -131,7 +131,7 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
 
   /* ── Core subscription ──────────────────────────────────────────── */
 
-  function subscribeStream(targetKey: string, cwd: string, client: GitStatusClient): () => void {
+  function subscribeStream(targetKey: string, cwd: string, client: VcsStatusClient): () => void {
     markPending(targetKey);
     return client.onStatus({ cwd }, (status) => setData(targetKey, status), {
       onResubscribe: () => markPending(targetKey),
@@ -140,7 +140,7 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
 
   /* ── Dynamic subscription (handles reconnection) ────────────────── */
 
-  function createDynamicSubscription(targetKey: string, target: GitStatusTarget): () => void {
+  function createDynamicSubscription(targetKey: string, target: VcsStatusTarget): () => void {
     const environmentId = target.environmentId!;
     const cwd = target.cwd!;
     let currentIdentity: string | null = null;
@@ -179,7 +179,7 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
   /* ── Public API ─────────────────────────────────────────────────── */
 
   /**
-   * Begin watching git status for `target`.
+   * Begin watching VCS status for `target`.
    *
    * Multiple watchers sharing the same `environmentId:cwd` key share
    * one `onStatus` WS subscription (ref-counted).
@@ -189,8 +189,8 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
    *                 lookup and reconnection handling. Useful in tests.
    * @returns An unwatch function.
    */
-  function watch(target: GitStatusTarget, client?: GitStatusClient): () => void {
-    const targetKey = getGitStatusTargetKey(target);
+  function watch(target: VcsStatusTarget, client?: VcsStatusClient): () => void {
+    const targetKey = getVcsStatusTargetKey(target);
     if (targetKey === null || target.environmentId === null || target.cwd === null) {
       return NOOP;
     }
@@ -238,10 +238,10 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
    * `onStatus` stream, so the subscription picks it up automatically.
    */
   function refresh(
-    target: GitStatusTarget,
-    client?: GitStatusClient,
+    target: VcsStatusTarget,
+    client?: VcsStatusClient,
   ): Promise<VcsStatusResult | null> {
-    const targetKey = getGitStatusTargetKey(target);
+    const targetKey = getVcsStatusTargetKey(target);
     if (targetKey === null || target.cwd === null) {
       return Promise.resolve(null);
     }
@@ -257,7 +257,7 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
 
     const requestedAt = nowMs();
     const last = lastRefreshAt.get(targetKey) ?? 0;
-    if (requestedAt - last < GIT_STATUS_REFRESH_DEBOUNCE_MS) {
+    if (requestedAt - last < VCS_STATUS_REFRESH_DEBOUNCE_MS) {
       return Promise.resolve(getSnapshot(target).data);
     }
 
@@ -269,10 +269,10 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
     return promise;
   }
 
-  function getSnapshot(target: GitStatusTarget): GitStatusState {
-    const targetKey = getGitStatusTargetKey(target);
-    if (targetKey === null) return EMPTY_GIT_STATUS_STATE;
-    return config.getRegistry().get(gitStatusStateAtom(targetKey));
+  function getSnapshot(target: VcsStatusTarget): VcsStatusState {
+    const targetKey = getVcsStatusTargetKey(target);
+    if (targetKey === null) return EMPTY_VCS_STATUS_STATE;
+    return config.getRegistry().get(vcsStatusStateAtom(targetKey));
   }
 
   function reset(): void {
@@ -282,10 +282,10 @@ export function createGitStatusManager(config: GitStatusManagerConfig) {
     watched.clear();
     refreshInFlight.clear();
     lastRefreshAt.clear();
-    for (const key of knownGitStatusKeys) {
-      config.getRegistry().set(gitStatusStateAtom(key), INITIAL_GIT_STATUS_STATE);
+    for (const key of knownVcsStatusKeys) {
+      config.getRegistry().set(vcsStatusStateAtom(key), INITIAL_VCS_STATUS_STATE);
     }
-    knownGitStatusKeys.clear();
+    knownVcsStatusKeys.clear();
   }
 
   return { watch, refresh, getSnapshot, reset };

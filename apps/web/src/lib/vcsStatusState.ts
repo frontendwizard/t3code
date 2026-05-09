@@ -1,13 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  type GitStatusClient,
-  type GitStatusState,
-  type GitStatusTarget,
-  EMPTY_GIT_STATUS_ATOM,
-  EMPTY_GIT_STATUS_STATE,
-  createGitStatusManager,
-  getGitStatusTargetKey,
-  gitStatusStateAtom,
+  type VcsStatusClient,
+  type VcsStatusState,
+  type VcsStatusTarget,
+  EMPTY_VCS_STATUS_ATOM,
+  EMPTY_VCS_STATUS_STATE,
+  createVcsStatusManager,
+  getVcsStatusTargetKey,
+  vcsStatusStateAtom,
 } from "@t3tools/client-runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect } from "react";
@@ -18,9 +18,9 @@ import {
 } from "../environments/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 
-export type { GitStatusState, GitStatusTarget };
+export type { VcsStatusState, VcsStatusTarget };
 
-const manager = createGitStatusManager({
+const manager = createVcsStatusManager({
   getRegistry: () => appAtomRegistry,
   getClient: (environmentId) => {
     const connection = readEnvironmentConnection(environmentId as EnvironmentId);
@@ -33,31 +33,31 @@ const manager = createGitStatusManager({
   subscribeClientChanges: subscribeEnvironmentConnections,
 });
 
-export function getGitStatusSnapshot(target: GitStatusTarget): GitStatusState {
+export function getVcsStatusSnapshot(target: VcsStatusTarget): VcsStatusState {
   return manager.getSnapshot(target);
 }
 
-export function watchGitStatus(target: GitStatusTarget, client?: GitStatusClient): () => void {
+export function watchVcsStatus(target: VcsStatusTarget, client?: VcsStatusClient): () => void {
   return manager.watch(target, client);
 }
 
-export function refreshGitStatus(target: GitStatusTarget, client?: GitStatusClient) {
+export function refreshVcsStatus(target: VcsStatusTarget, client?: VcsStatusClient) {
   return manager.refresh(target, client);
 }
 
-export function resetGitStatusStateForTests(): void {
+export function resetVcsStatusStateForTests(): void {
   manager.reset();
 }
 
-export function useGitStatus(target: GitStatusTarget): GitStatusState {
-  const targetKey = getGitStatusTargetKey(target);
+export function useVcsStatus(target: VcsStatusTarget): VcsStatusState {
+  const targetKey = getVcsStatusTargetKey(target);
   useEffect(
     () => manager.watch({ environmentId: target.environmentId, cwd: target.cwd }),
     [target.environmentId, target.cwd],
   );
 
   const state = useAtomValue(
-    targetKey !== null ? gitStatusStateAtom(targetKey) : EMPTY_GIT_STATUS_ATOM,
+    targetKey !== null ? vcsStatusStateAtom(targetKey) : EMPTY_VCS_STATUS_ATOM,
   );
-  return targetKey === null ? EMPTY_GIT_STATUS_STATE : state;
+  return targetKey === null ? EMPTY_VCS_STATUS_STATE : state;
 }
