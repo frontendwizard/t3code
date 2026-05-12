@@ -3,6 +3,8 @@ import type {
   NativeReviewDiffFile,
   NativeReviewDiffLanguage,
 } from "../diffs/nativeReviewDiffTypes";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import { getPierreTerminalTheme, type TerminalAppearanceScheme } from "../terminal/terminalTheme";
 import { computeWordAltDiffRanges } from "./reviewWordDiffs";
 import {
@@ -188,19 +190,22 @@ function trimWordDiffRanges(
   content: string,
   ranges: NonNullable<NativeReviewDiffRow["wordDiffRanges"]>,
 ): NonNullable<NativeReviewDiffRow["wordDiffRanges"]> {
-  return ranges.flatMap((range) => {
-    let start = Math.max(0, range.start);
-    let end = Math.min(content.length, range.end);
+  return pipe(
+    ranges,
+    Arr.flatMap((range) => {
+      let start = Math.max(0, range.start);
+      let end = Math.min(content.length, range.end);
 
-    while (start < end && /\s/.test(content[start] ?? "")) {
-      start += 1;
-    }
-    while (end > start && /\s/.test(content[end - 1] ?? "")) {
-      end -= 1;
-    }
+      while (start < end && /\s/.test(content[start] ?? "")) {
+        start += 1;
+      }
+      while (end > start && /\s/.test(content[end - 1] ?? "")) {
+        end -= 1;
+      }
 
-    return end > start ? [{ start, end }] : [];
-  });
+      return end > start ? [{ start, end }] : [];
+    }),
+  );
 }
 
 function nonWhitespaceLength(value: string) {
@@ -410,7 +415,7 @@ export function buildNativeReviewDiffData(
   const commentTargetsByRowId = new Map<string, NativeReviewDiffCommentTarget>();
   const rowIdByCommentLineId = new Map<string, string>();
   const rows = addNativeWordDiffRanges(
-    parsedDiff.files.flatMap((file) =>
+    Arr.flatMap(parsedDiff.files, (file) =>
       mapFileRows(file, comments, commentTargetsByRowId, rowIdByCommentLineId),
     ),
   );
