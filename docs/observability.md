@@ -49,6 +49,40 @@ If OTLP is not configured, metrics still exist in-process, but you will not have
 
 Provider event NDJSON files still exist for provider runtime streams. Those are separate from the main server trace file.
 
+### Provider Event Logs
+
+Provider logs are written under the provider logs directory:
+
+- packaged app: `~/.t3/userdata/logs/provider`
+- monorepo dev: `./dev/logs/provider`
+
+Each thread gets one log file named `<thread-id>.log`; process-wide records use `_global.log`. Lines are timestamped JSON records. `NTIVE` lines are native provider/protocol logs and T3 provider lifecycle breadcrumbs. `CANON` lines are canonical runtime events after provider normalization.
+
+Every provider operation now writes shared lifecycle records:
+
+- `started`: T3 called the provider adapter
+- `waiting`: the provider operation has not returned after 10 seconds, then every 30 seconds
+- `succeeded`: the provider adapter returned successfully
+- `failed`: the provider adapter returned an error, including the formatted cause
+
+For a hanging provider turn, tail the thread log and look for `provider.lifecycle` records:
+
+```bash
+tail -f ~/.t3/userdata/logs/provider/<thread-id>.log
+```
+
+In dev:
+
+```bash
+tail -f ./dev/logs/provider/<thread-id>.log
+```
+
+Quickly scan all provider logs:
+
+```bash
+rg 'provider.lifecycle|session/prompt|session/update|runtime.warning|runtime.error' ~/.t3/userdata/logs/provider
+```
+
 ## Run The Server In Instrumented Mode
 
 There are two useful modes:

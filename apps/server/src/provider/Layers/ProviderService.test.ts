@@ -603,6 +603,71 @@ it.effect("ProviderServiceLive writes canonical events to the emitting thread se
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("ProviderServiceLive writes shared provider lifecycle records to native logs", () =>
+  Effect.gen(function* () {
+    const codex = makeFakeCodexAdapter();
+    const nativeEvents: Array<{ readonly event?: Record<string, unknown> }> = [];
+    const nativeThreadIds: Array<string | null> = [];
+    const registry = makeAdapterRegistryMock({
+      [ProviderDriverKind.make("codex")]: codex.adapter,
+    });
+    const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = makeProviderServiceLive({
+      nativeEventLogger: {
+        filePath: "memory://provider-native-events",
+        write: (event, threadId) => {
+          nativeEvents.push(event as { readonly event?: Record<string, unknown> });
+          nativeThreadIds.push(threadId ?? null);
+          return Effect.void;
+        },
+        close: () => Effect.void,
+      },
+    }).pipe(
+      Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    );
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-provider-lifecycle");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+        threadId,
+      });
+      yield* provider.sendTurn({ threadId, input: "hello" });
+    }).pipe(Effect.provide(providerLayer));
+
+    const lifecycleEvents = nativeEvents
+      .map((entry) => entry.event)
+      .filter((event) => event?.kind === "provider.lifecycle");
+
+    assert.deepEqual(
+      lifecycleEvents.map((event) => [event?.operation, event?.phase]),
+      [
+        ["startSession", "started"],
+        ["startSession", "succeeded"],
+        ["sendTurn", "started"],
+        ["sendTurn", "succeeded"],
+      ],
+    );
+    assert.deepEqual(nativeThreadIds, [
+      "thread-provider-lifecycle",
+      "thread-provider-lifecycle",
+      "thread-provider-lifecycle",
+      "thread-provider-lifecycle",
+    ]);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-"));

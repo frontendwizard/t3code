@@ -1,6 +1,6 @@
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
-import type { ToolLifecycleItemType } from "@t3tools/contracts";
+import type { ServerProviderSlashCommand, ToolLifecycleItemType } from "@t3tools/contracts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -69,6 +69,17 @@ export type AcpParsedSessionEvent =
       readonly itemId?: string;
       readonly text: string;
       readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly usedTokens: number;
+      readonly maxTokens: number;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "AvailableCommandsUpdated";
+      readonly commands: ReadonlyArray<ServerProviderSlashCommand>;
+      readonly rawPayload: unknown;
     };
 
 type AcpSessionSetupResponse =
@@ -80,6 +91,44 @@ type AcpToolCallUpdate = Extract<
   EffectAcpSchema.SessionNotification["update"],
   { readonly sessionUpdate: "tool_call" | "tool_call_update" }
 >;
+
+const T3_BUILT_IN_SLASH_COMMAND_NAMES = new Set(["model", "plan", "default"]);
+
+function normalizeAvailableCommandName(name: string): string | undefined {
+  const normalized = name.trim().replace(/^\/+/u, "");
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(normalized) ? normalized : undefined;
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+export function normalizeAcpAvailableCommands(
+  availableCommands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
+): ReadonlyArray<ServerProviderSlashCommand> {
+  const commandsByName = new Map<string, ServerProviderSlashCommand>();
+  for (const command of availableCommands) {
+    const name = normalizeAvailableCommandName(command.name);
+    if (!name) {
+      continue;
+    }
+    const key = name.toLowerCase();
+    if (T3_BUILT_IN_SLASH_COMMAND_NAMES.has(key) || commandsByName.has(key)) {
+      continue;
+    }
+    const description = normalizeOptionalText(command.description);
+    const inputHint = normalizeOptionalText(command.input?.hint);
+    commandsByName.set(key, {
+      name,
+      ...(description ? { description } : {}),
+      ...(inputHint ? { input: { hint: inputHint } } : {}),
+    });
+  }
+  return [...commandsByName.values()].toSorted((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
 
 export function extractModelConfigId(sessionResponse: AcpSessionSetupResponse): string | undefined {
   const configOptions = sessionResponse.configOptions;
@@ -469,6 +518,26 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         events.push({
           _tag: "ContentDelta",
           text: upd.content.text,
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "usage_update": {
+      events.push({
+        _tag: "UsageUpdated",
+        usedTokens: upd.used,
+        maxTokens: upd.size,
+        rawPayload: params,
+      });
+      break;
+    }
+    case "available_commands_update": {
+      const commands = normalizeAcpAvailableCommands(upd.availableCommands);
+      if (commands.length > 0) {
+        events.push({
+          _tag: "AvailableCommandsUpdated",
+          commands,
           rawPayload: params,
         });
       }
