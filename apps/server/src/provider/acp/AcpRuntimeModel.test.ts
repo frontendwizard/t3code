@@ -5,6 +5,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import {
   extractModelConfigId,
   mergeToolCallState,
+  normalizeAcpAvailableCommands,
   parsePermissionRequest,
   parseSessionModeState,
   parseSessionUpdateEvent,
@@ -239,6 +240,118 @@ describe("AcpRuntimeModel", () => {
               type: "text",
               text: "hello from acp",
             },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("projects ACP usage updates for context window meters", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "usage_update",
+        size: 200_000,
+        used: 31_251,
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "UsageUpdated",
+        usedTokens: 31_251,
+        maxTokens: 200_000,
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "usage_update",
+            size: 200_000,
+            used: 31_251,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("normalizes ACP available command updates into provider slash commands", () => {
+    const commands = normalizeAcpAvailableCommands([
+      {
+        name: " /skills ",
+        description: " Manage skills ",
+      },
+      {
+        name: "review",
+        description: "Review repository changes",
+        input: { hint: "optional path" },
+      },
+      {
+        name: "model",
+        description: "T3 owns this command",
+      },
+      {
+        name: "review",
+        description: "Duplicate from another source",
+      },
+      {
+        name: "bad command",
+        description: "Invalid command name",
+      },
+    ] satisfies ReadonlyArray<EffectAcpSchema.AvailableCommand>);
+
+    expect(commands).toEqual([
+      {
+        name: "review",
+        description: "Review repository changes",
+        input: { hint: "optional path" },
+      },
+      {
+        name: "skills",
+        description: "Manage skills",
+      },
+    ]);
+  });
+
+  it("projects ACP available command notifications", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          {
+            name: "research",
+            description: "Run deep research",
+          },
+          {
+            name: "plan",
+            description: "T3-owned plan command",
+          },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [
+          {
+            name: "research",
+            description: "Run deep research",
+          },
+        ],
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              {
+                name: "research",
+                description: "Run deep research",
+              },
+              {
+                name: "plan",
+                description: "T3-owned plan command",
+              },
+            ],
           },
         },
       },
