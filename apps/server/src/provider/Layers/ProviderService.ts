@@ -27,6 +27,8 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -65,6 +67,7 @@ const isModelSelection = Schema.is(ModelSelection);
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  readonly nativeEventLogger?: EventNdjsonLogger;
 }
 
 const ProviderRollbackConversationInput = Schema.Struct({
@@ -207,11 +210,95 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   // log writer is attached", which downstream code already handles as a
   // no-op.
   const canonicalEventLogger = options?.canonicalEventLogger ?? eventLoggers.canonical;
+  const nativeEventLogger = options?.nativeEventLogger ?? eventLoggers.native;
 
   const registry = yield* ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+  const writeProviderLifecycleLog = (event: {
+    readonly operation: string;
+    readonly phase: "started" | "waiting" | "succeeded" | "failed";
+    readonly provider?: ProviderDriverKind | string;
+    readonly providerInstanceId?: ProviderInstanceId | string;
+    readonly threadId?: ThreadId;
+    readonly turnId?: string;
+    readonly requestId?: string;
+    readonly detail?: unknown;
+  }) =>
+    Effect.gen(function* () {
+      if (!nativeEventLogger) return;
+      const observedAt = yield* nowIso;
+      yield* nativeEventLogger.write(
+        {
+          observedAt,
+          event: {
+            kind: "provider.lifecycle",
+            observedAt,
+            ...event,
+          },
+        },
+        event.threadId ?? null,
+      );
+    });
+
+  const withProviderLifecycleLogging = <A, E, R>(
+    input: {
+      readonly operation: string;
+      readonly provider?: ProviderDriverKind | string;
+      readonly providerInstanceId?: ProviderInstanceId | string;
+      readonly threadId?: ThreadId;
+      readonly turnId?: string;
+      readonly requestId?: string;
+      readonly detail?: unknown;
+    },
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    Effect.gen(function* () {
+      yield* writeProviderLifecycleLog({ ...input, phase: "started" });
+
+      const completed = yield* Ref.make(false);
+      const watchdog = yield* Effect.gen(function* () {
+        yield* Effect.sleep("10 seconds");
+        let elapsedMs = 10_000;
+        while (!(yield* Ref.get(completed))) {
+          yield* writeProviderLifecycleLog({
+            ...input,
+            phase: "waiting",
+            detail: {
+              ...((typeof input.detail === "object" && input.detail !== null
+                ? input.detail
+                : {}) as Record<string, unknown>),
+              elapsedMs,
+            },
+          });
+          yield* Effect.sleep("30 seconds");
+          elapsedMs += 30_000;
+        }
+      }).pipe(Effect.forkChild);
+
+      const exit = yield* Effect.exit(effect);
+      yield* Ref.set(completed, true);
+      yield* Fiber.interrupt(watchdog);
+
+      if (Exit.isSuccess(exit)) {
+        yield* writeProviderLifecycleLog({ ...input, phase: "succeeded" });
+        return exit.value;
+      }
+
+      yield* writeProviderLifecycleLog({
+        ...input,
+        phase: "failed",
+        detail: {
+          ...((typeof input.detail === "object" && input.detail !== null
+            ? input.detail
+            : {}) as Record<string, unknown>),
+          cause: Cause.pretty(exit.cause),
+        },
+      });
+      return yield* Effect.failCause(exit.cause);
+    });
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Effect.succeed(event).pipe(
@@ -572,12 +659,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        const session = yield* adapter.startSession({
-          ...input,
-          providerInstanceId: resolvedInstanceId,
-          ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-          ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
-        });
+        const session = yield* withProviderLifecycleLogging(
+          {
+            operation: "startSession",
+            provider: adapter.provider,
+            providerInstanceId: resolvedInstanceId,
+            threadId,
+            detail: {
+              runtimeMode: input.runtimeMode,
+              hasResumeCursor: effectiveResumeCursor !== undefined,
+              hasCwd: typeof effectiveCwd === "string" && effectiveCwd.trim().length > 0,
+              model: input.modelSelection?.model,
+            },
+          },
+          adapter.startSession({
+            ...input,
+            providerInstanceId: resolvedInstanceId,
+            ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+            ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
+          }),
+        );
 
         if (session.provider !== adapter.provider) {
           return yield* toValidationError(
@@ -657,7 +758,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
       });
-      const turn = yield* routed.adapter.sendTurn(input);
+      const turn = yield* withProviderLifecycleLogging(
+        {
+          operation: "sendTurn",
+          provider: routed.adapter.provider,
+          providerInstanceId: routed.instanceId,
+          threadId: input.threadId,
+          detail: {
+            model: input.modelSelection?.model,
+            interactionMode: input.interactionMode,
+            attachmentCount: input.attachments.length,
+            hasInput: typeof input.input === "string" && input.input.trim().length > 0,
+          },
+        },
+        routed.adapter.sendTurn(input),
+      );
       yield* directory.upsert({
         threadId: input.threadId,
         provider: routed.adapter.provider,
@@ -716,7 +831,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
-        yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
+        yield* withProviderLifecycleLogging(
+          {
+            operation: "interruptTurn",
+            provider: routed.adapter.provider,
+            providerInstanceId: routed.instanceId,
+            threadId: input.threadId,
+            ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+          },
+          routed.adapter.interruptTurn(routed.threadId, input.turnId),
+        );
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,
         });
@@ -753,7 +877,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.request_id": input.requestId,
         });
-        yield* routed.adapter.respondToRequest(routed.threadId, input.requestId, input.decision);
+        yield* withProviderLifecycleLogging(
+          {
+            operation: "respondToRequest",
+            provider: routed.adapter.provider,
+            providerInstanceId: routed.instanceId,
+            threadId: input.threadId,
+            requestId: input.requestId,
+            detail: { decision: input.decision },
+          },
+          routed.adapter.respondToRequest(routed.threadId, input.requestId, input.decision),
+        );
         yield* analytics.record("provider.request.responded", {
           provider: routed.adapter.provider,
           decision: input.decision,
@@ -792,7 +926,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.thread_id": input.threadId,
         "provider.request_id": input.requestId,
       });
-      yield* routed.adapter.respondToUserInput(routed.threadId, input.requestId, input.answers);
+      yield* withProviderLifecycleLogging(
+        {
+          operation: "respondToUserInput",
+          provider: routed.adapter.provider,
+          providerInstanceId: routed.instanceId,
+          threadId: input.threadId,
+          requestId: input.requestId,
+          detail: { answerCount: Object.keys(input.answers).length },
+        },
+        routed.adapter.respondToUserInput(routed.threadId, input.requestId, input.answers),
+      );
     }).pipe(
       withMetrics({
         counter: providerTurnsTotal,
@@ -825,7 +969,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
         });
         if (routed.isActive) {
-          yield* routed.adapter.stopSession(routed.threadId);
+          yield* withProviderLifecycleLogging(
+            {
+              operation: "stopSession",
+              provider: routed.adapter.provider,
+              providerInstanceId: routed.instanceId,
+              threadId: input.threadId,
+            },
+            routed.adapter.stopSession(routed.threadId),
+          );
+        } else {
+          yield* writeProviderLifecycleLog({
+            operation: "stopSession",
+            provider: routed.adapter.provider,
+            providerInstanceId: routed.instanceId,
+            threadId: input.threadId,
+            phase: "succeeded",
+            detail: { skipped: "session already inactive" },
+          });
         }
         yield* directory.upsert({
           threadId: input.threadId,
